@@ -23,7 +23,7 @@ class DownsamplerBlock (nn.Module):
     
 
 class non_bottleneck_1d (nn.Module):
-    def __init__(self, chann, dropprob, dilated):        
+    def __init__(self, chann, dropprob, dilated): #64 0 1
         super().__init__()
 
         self.conv3x1_1 = nn.Conv2d(chann, chann, (3, 1), stride=1, padding=(1,0), bias=True)
@@ -156,4 +156,4 @@ class Net(nn.Module):
             for i in [0, 1]:  # ChangedByUs
                 results.append(self.encoder.forward(inputs[i]))  # ChangedByUs
             res = torch.cat((results[0], results[1]), dim=1)  # askalex - if dim = 1 or 0
-            return self.decoder.forward(res)  # ChangedByUs TODO CONCATINATE IMAGES BEFORE THIS!!
+            return self.decoder.forward(res)  # ChangedByUs

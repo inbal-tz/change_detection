@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import math
 
-
+import cv2 #changedByAlex
 #Importing library to do image related operations
 from PIL import Image, ImageOps
 
@@ -44,10 +44,11 @@ NUM_CHANNELS = 3 #RGB Images
 NUM_CLASSES = 2 #IDD Lite has 8 labels or Level1 hierarchy of labels
 USE_CUDA = torch.cuda.is_available()
 IMAGE_HEIGHT = 256
+OUTPUT_DIR = r'D:\Users Data\inbal.tlgip\Project\output_images'
 DATA_ROOT = r'D:\Users Data\inbal.tlgip\Desktop\ChangeDetectionDataset'
 BATCH_SIZE = 2
 NUM_WORKERS = 10
-NUM_EPOCHS = 1
+NUM_EPOCHS = 20
 ENCODER_ONLY = False
 device = torch.device("cuda")
 # device = torch.device("cpu")
@@ -105,6 +106,8 @@ class MyCoTransform(object):
 #
 # We'll follow pytorch recommended semantics, and use a dataloader to load the data.
 
+
+
 def main():
     best_acc = 0
 
@@ -121,9 +124,11 @@ def main():
 
     # NOTE: PLEASE DON'T CHANGE batch_size and num_workers here. We have limited resources.
     loader_train = DataLoader(dataset_train, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
-    loader_val = DataLoader(dataset_val, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=False)
-
-
+    loader_val = DataLoader(dataset_val, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+    dataiter = iter(loader_val)
+    (first_val_image_A, first_val_image_B, first_val_image_labels) = dataiter.next()
+    first_val_image_A = first_val_image_A.to(device)
+    first_val_image_B = first_val_image_B.to(device)
     # ## Cross Entropy  Loss ##
     # Negative Log Loss   |Plot of -log(x) vs x
     # - | -
@@ -137,23 +142,18 @@ def main():
     criterion = torch.nn.CrossEntropyLoss()
 
 
-    # ### Take a look at the data? ###
-
-    # In[50]:
-
 
     #get some random training images
     print("length of training couples: ",len(loader_train))
-    #print(len(loader_val))
-    #dataiter = iter(loader_train)
-    #print(dataiter.next())
-    #(images, images1, labels) = dataiter.next() #ChangedByUs
-    #for step, (images, labels) in enumerate(loader_train):
+    print(len(loader_val))
+    dataiter = iter(loader_train)
+    (images, images1, labels) = dataiter.next() #ChangedByUs
+    # for step, (images, labels) in enumerate(loader_train):
     # plt.figure()
     # plt.imshow(ToPILImage()(images[0].cpu()))
     # plt.figure()
     # plt.imshow(ToPILImage()(Colorize()(labels[0].cpu())))
-    #break
+    # break
 
 
     # ## Model ##
@@ -166,23 +166,17 @@ def main():
 
     # ### Optimizer ###
 
-    # In[39]:
-
 
     # We use adam optimizer. It can be replaced with SGD and other optimizers
     optimizer = Adam(model.parameters(), 5e-4, (0.9, 0.999),  eps=1e-08, weight_decay=1e-4)
     start_epoch = 1
 
 
-    # In[40]:
-
-
     print("device used: ",device)
 
 
     # ### Training Procedure ###
-
-
+    softmax = torch.nn.Softmax(dim=1)
     import os
     steps_loss = 50
     my_start_time = time.time()
@@ -205,8 +199,9 @@ def main():
             inputs = images.to(device)
             inputs1 = images1.to(device) #ChangedByUs
             targets = labels.to(device)
-            targets[targets >= 128] = 1 #ChangedByUs
-            targets[targets < 128] = 0  #ChangedByUs
+            targets_orig = targets.clone()
+            targets[targets_orig >= 128] = 1  # ChangedByUs
+            targets[targets_orig < 128] = 0  # ChangedByUs
             #for x_u in targets.unique():
             #    print(int(x_u), ' appears ', int(torch.stack([(targets==x_u).sum()])), ' times.\n')
             outputs = model([inputs, inputs1], only_encode=ENCODER_ONLY)
@@ -230,6 +225,20 @@ def main():
                 average = sum(epoch_loss) / len(epoch_loss)
                 print('loss: {average:',average,'} (epoch: {',epoch,'}, step: {', step, '})', "// Avg time/img: %.4f s" % (sum(time_train) / len(time_train) / BATCH_SIZE))
 
+
+            if step % 500 == 0:
+                outputs_val = model([first_val_image_A.cuda(), first_val_image_B.cuda()], only_encode=ENCODER_ONLY)
+                outputs_val = softmax(outputs_val)
+                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_A.tiff'),
+                            np.rollaxis((first_val_image_A[0, :, :, :].squeeze().cpu().numpy() * 255).astype('uint8'), 0, 3))
+                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_B.tiff'),
+                            np.rollaxis((first_val_image_B[0, :, :, :].squeeze().cpu().numpy() * 255).astype('uint8'), 0, 3))
+                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_label.tiff'),
+                            (first_val_image_labels[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'))
+                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_output.tiff'),
+                            (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
+
+
         average_epoch_loss_train = sum(epoch_loss) / len(epoch_loss)
 
         iouTrain = 0
@@ -237,6 +246,29 @@ def main():
             iouTrain, iou_classes = iouEvalTrain.getIoU()
             iouStr = getColorEntry(iouTrain)+'{:0.2f}'.format(iouTrain*100) + '\033[0m'
             print ("EPOCH IoU on TRAIN set: ", iouStr, "%")
+
+        #save one image per epoch
+        if USE_CUDA:
+            first_val_image_A = first_val_image_A.to(device)
+            first_val_image_B = first_val_image_B.to(device)  # ChangedByUs
+            first_val_image_labels = first_val_image_labels.to(device)
+
+        inputs = first_val_image_A.to(device)
+        inputs1 = first_val_image_B.to(device)  # ChangedByUs
+
+        with torch.no_grad():
+            outputs = model([inputs, inputs1], only_encode=ENCODER_ONLY)  # ChangedByUs
+
+        label = outputs[0].max(0)[1].byte().cpu().data
+
+        label_color = Colorize()(label.unsqueeze(0))
+
+        label_save = ToPILImage()(label_color)
+
+        plt.figure()
+        plt.imshow(label_save)
+        plt.savefig(r'D:\Users Data\inbal.tlgip\Project\output_images\epoch' + str(epoch) + '.jpg')
+
     my_end_time = time.time()
     print(my_end_time - my_start_time)
 
@@ -244,81 +276,61 @@ def main():
     print('loss: {average:',average,'} (epoch: {',epoch,'}, step: {',step,'})', "// Avg time/img: %.4f s" % (sum(time_train) / len(time_train) / BATCH_SIZE))
 
 
-# # ### Validation ###
-# #Validate on val images after each epoch of training
-# print("----- VALIDATING - EPOCH", epoch, "-----")
-# model.eval()
-# epoch_loss_val = []
-# time_val = []
-#
-# if (doIouVal):
-#     iouEvalVal = iouEval(NUM_CLASSES)
-#
-# for step, (images, labels) in enumerate(loader_val):
-#     start_time = time.time()
-#
-#     inputs = images.to(device)
-#     targets = labels.to(device)
-#
-#     with torch.no_grad():
-#         outputs = model(inputs, only_encode=ENCODER_ONLY)
-#         #outputs = model(inputs)
-#     loss = criterion(outputs, targets[:, 0])
-#     epoch_loss_val.append(loss.item())
-#     time_val.append(time.time() - start_time)
-#
-#
-#     #Add batch to calculate TP, FP and FN for iou estimation
-#     if (doIouVal):
-#         #start_time_iou = time.time()
-#         iouEvalVal.addBatch(outputs.max(1)[1].unsqueeze(1).data, targets.data)
-#         #print ("Time to add confusion matrix: ", time.time() - start_time_iou)
-#
-#     if steps_loss > 0 and step % steps_loss == 0:
-#         average = sum(epoch_loss_val) / len(epoch_loss_val)
-#         print('VAL loss: {average:',average,'} (epoch: {',epoch,'}, step: {',step,'})',
-#                 "// Avg time/img: %.4f s" % (sum(time_val) / len(time_val) / BATCH_SIZE))
-#
-#
-# average_epoch_loss_val = sum(epoch_loss_val) / len(epoch_loss_val)
-#
-# iouVal = 0
-# if (doIouVal):
-#
-#     iouVal, iou_classes = iouEvalVal.getIoU()
-#     print(iou_classes)
-#     iouStr = getColorEntry(iouVal)+'{:0.2f}'.format(iouVal*100) + '\033[0m'
-#     print ("EPOCH IoU on VAL set: ", iouStr, "%")
+    # # ### Validation ###
+    # #Validate on val images after each epoch of training
+    # print("----- VALIDATING - EPOCH", epoch, "-----")
+    # model.eval()
+    # epoch_loss_val = []
+    # time_val = []
+    #
+    # if (doIouVal):
+    #     iouEvalVal = iouEval(NUM_CLASSES)
+    #
+    # for step, (images, labels) in enumerate(loader_val):
+    #     start_time = time.time()
+    #
+    #     inputs = images.to(device)
+    #     targets = labels.to(device)
+    #
+    #     with torch.no_grad():
+    #         outputs = model(inputs, only_encode=ENCODER_ONLY)
+    #         #outputs = model(inputs)
+    #     loss = criterion(outputs, targets[:, 0])
+    #     epoch_loss_val.append(loss.item())
+    #     time_val.append(time.time() - start_time)
+    #
+    #
+    #     #Add batch to calculate TP, FP and FN for iou estimation
+    #     if (doIouVal):
+    #         #start_time_iou = time.time()
+    #         iouEvalVal.addBatch(outputs.max(1)[1].unsqueeze(1).data, targets.data)
+    #         #print ("Time to add confusion matrix: ", time.time() - start_time_iou)
+    #
+    #     if steps_loss > 0 and step % steps_loss == 0:
+    #         average = sum(epoch_loss_val) / len(epoch_loss_val)
+    #         print('VAL loss: {average:',average,'} (epoch: {',epoch,'}, step: {',step,'})',
+    #                 "// Avg time/img: %.4f s" % (sum(time_val) / len(time_val) / BATCH_SIZE))
+    #
+    #
+    # average_epoch_loss_val = sum(epoch_loss_val) / len(epoch_loss_val)
+    #
+    # iouVal = 0
+    # if (doIouVal):
+    #
+    #     iouVal, iou_classes = iouEvalVal.getIoU()
+    #     print(iou_classes)
+    #     iouStr = getColorEntry(iouVal)+'{:0.2f}'.format(iouVal*100) + '\033[0m'
+    #     print ("EPOCH IoU on VAL set: ", iouStr, "%")
 
-#
-#  ### Visualizing the Output###
+    #
+    #  ### Visualizing the Output###
+    torch.save(model.state_dict(),r'C:\Users\inbal.tlgip\modelsave.pt')
+    # Qualitative Analysis
 
-# Qualitative Analysis
-#TODO CRASHES HERE :(
-# dataiter = iter(loader_val)
-# (images, images1, labels) = dataiter.next() #ChangedByUs
-#
-# if USE_CUDA:
-#     images = images.to(device)
-#     images1 = images1.to(device) #ChangedByUs
-#
-# inputs = images.to(device)
-# inputs1 = images1.to(device) #ChangedByUs
-#
-# with torch.no_grad():
-#     outputs = model([inputs, inputs1], only_encode=ENCODER_ONLY) #ChangedByUs
-#
-# label = outputs[0].max(0)[1].byte().cpu().data
-#
-# label_color = Colorize()(label.unsqueeze(0))
-#
-# label_save = ToPILImage()(label_color)
-# plt.figure()
-# plt.imshow(ToPILImage()(images[0].cpu()))
-# plt.show()
-# plt.figure()
-# plt.imshow(label_save)
-# plt.show()
+
+
+
+
 if __name__ == '__main__':
     #freeze_support()
     main()
