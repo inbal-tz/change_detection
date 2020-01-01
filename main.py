@@ -3,6 +3,7 @@ import random
 import time
 import numpy as np
 import torch
+import os
 import math
 
 import cv2 #changedByAlex
@@ -48,7 +49,7 @@ OUTPUT_DIR = r'D:\Users Data\inbal.tlgip\Project\output_images'
 DATA_ROOT = r'D:\Users Data\inbal.tlgip\Desktop\ChangeDetectionDataset'
 BATCH_SIZE = 2
 NUM_WORKERS = 10
-NUM_EPOCHS = 20
+NUM_EPOCHS = 150
 ENCODER_ONLY = False
 device = torch.device("cuda")
 # device = torch.device("cpu")
@@ -126,9 +127,17 @@ def main():
     loader_train = DataLoader(dataset_train, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
     loader_val = DataLoader(dataset_val, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
     dataiter = iter(loader_val)
-    (first_val_image_A, first_val_image_B, first_val_image_labels) = dataiter.next()
-    first_val_image_A = first_val_image_A.to(device)
-    first_val_image_B = first_val_image_B.to(device)
+    seven_val_images = []
+    for i in range(7):
+        (val_image_A, val_image_B, val_image_labels) = dataiter.next()
+        seven_val_images.append((val_image_A.to(device), val_image_B.to(device)))
+        cv2.imwrite(os.path.join(OUTPUT_DIR, str(i), 'A.tiff'),
+                    np.rollaxis((val_image_A[0, :, :, :].squeeze().cpu().numpy() * 255).astype('uint8'), 0, 3))
+        cv2.imwrite(os.path.join(OUTPUT_DIR, str(i), 'B.tiff'),
+                    np.rollaxis((val_image_B[0, :, :, :].squeeze().cpu().numpy() * 255).astype('uint8'), 0, 3))
+        cv2.imwrite(os.path.join(OUTPUT_DIR, str(i), 'label.tiff'),
+                    (val_image_labels[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'))
+
     # ## Cross Entropy  Loss ##
     # Negative Log Loss   |Plot of -log(x) vs x
     # - | -
@@ -177,7 +186,7 @@ def main():
 
     # ### Training Procedure ###
     softmax = torch.nn.Softmax(dim=1)
-    import os
+
     steps_loss = 50
     my_start_time = time.time()
     for epoch in range(start_epoch, NUM_EPOCHS+1):
@@ -226,19 +235,6 @@ def main():
                 print('loss: {average:',average,'} (epoch: {',epoch,'}, step: {', step, '})', "// Avg time/img: %.4f s" % (sum(time_train) / len(time_train) / BATCH_SIZE))
 
 
-            if step % 500 == 0:
-                outputs_val = model([first_val_image_A.cuda(), first_val_image_B.cuda()], only_encode=ENCODER_ONLY)
-                outputs_val = softmax(outputs_val)
-                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_A.tiff'),
-                            np.rollaxis((first_val_image_A[0, :, :, :].squeeze().cpu().numpy() * 255).astype('uint8'), 0, 3))
-                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_B.tiff'),
-                            np.rollaxis((first_val_image_B[0, :, :, :].squeeze().cpu().numpy() * 255).astype('uint8'), 0, 3))
-                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_label.tiff'),
-                            (first_val_image_labels[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'))
-                cv2.imwrite(os.path.join(OUTPUT_DIR, 'epoch'+str(epoch)+'_iter' + str(step) + '_output.tiff'),
-                            (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
-
-
         average_epoch_loss_train = sum(epoch_loss) / len(epoch_loss)
 
         iouTrain = 0
@@ -248,26 +244,18 @@ def main():
             print ("EPOCH IoU on TRAIN set: ", iouStr, "%")
 
         #save one image per epoch
-        if USE_CUDA:
-            first_val_image_A = first_val_image_A.to(device)
-            first_val_image_B = first_val_image_B.to(device)  # ChangedByUs
-            first_val_image_labels = first_val_image_labels.to(device)
-
-        inputs = first_val_image_A.to(device)
-        inputs1 = first_val_image_B.to(device)  # ChangedByUs
-
-        with torch.no_grad():
-            outputs = model([inputs, inputs1], only_encode=ENCODER_ONLY)  # ChangedByUs
-
-        label = outputs[0].max(0)[1].byte().cpu().data
-
-        label_color = Colorize()(label.unsqueeze(0))
-
-        label_save = ToPILImage()(label_color)
-
-        plt.figure()
-        plt.imshow(label_save)
-        plt.savefig(r'D:\Users Data\inbal.tlgip\Project\output_images\epoch' + str(epoch) + '.jpg')
+        # if USE_CUDA:
+        #     first_val_image_A = first_val_image_A.to(device)
+        #     first_val_image_B = first_val_image_B.to(device)  # ChangedByUs
+        #     first_val_image_labels = first_val_image_labels.to(device)
+        #
+        # inputs = first_val_image_A.to(device)
+        # inputs1 = first_val_image_B.to(device)  # ChangedByUs
+        for i in range(len(seven_val_images)):
+            outputs_val = model([seven_val_images[i][0].cuda(), seven_val_images[i][1].cuda()], only_encode=ENCODER_ONLY)
+            outputs_val = softmax(outputs_val)
+            cv2.imwrite(os.path.join(OUTPUT_DIR, str(i), 'epoch' + str(epoch) + '_output.tiff'),
+                        (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
 
     my_end_time = time.time()
     print(my_end_time - my_start_time)
@@ -328,9 +316,37 @@ def main():
     # Qualitative Analysis
 
 
+    ##################### calc iou on test data #####################
+    dataset_test = idd_lite(DATA_ROOT, co_transform_val, 'test')
+    loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+    # dataiter = iter(loader_test)
+    # (val_image_A, val_image_B, val_image_labels) = dataiter.next()
+    for step, (images, images1, labels) in enumerate(loader_test):
+        outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
+        outputs_val = softmax(outputs_val)
+        cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(step)+'.tiff',
+                    (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
+
 
 
 
 if __name__ == '__main__':
-    #freeze_support()
     main()
+
+#TODO USE MODEL ON ALL TEST IMAGES, AND SAVE TO FILE. LATER, LOAD IMAGES AND CALC IOU
+#to delete later: (WE DID THIS TO NOT RUN WHOLE MAIN AGAIN...)
+softmax = torch.nn.Softmax(dim=1)
+model = torch.load(r'C:\Users\inbal.tlgip\modelsave.pt')
+# model.eval()
+co_transform_val = MyCoTransform(ENCODER_ONLY, augment=False, height=IMAGE_HEIGHT) #askAlex why we dont augment in val?
+######
+
+dataset_test = idd_lite(DATA_ROOT, co_transform_val, 'test')
+loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+# dataiter = iter(loader_test)
+# (val_image_A, val_image_B, val_image_labels) = dataiter.next()
+for step, (images, images1, labels) in enumerate(loader_test):
+    outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
+    outputs_val = softmax(outputs_val)
+    cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(step)+'.tiff',
+                (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
