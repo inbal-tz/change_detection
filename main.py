@@ -5,6 +5,8 @@ import numpy as np
 import torch
 import os
 import math
+import torch.nn as nn
+from iou_cc import calc_iou
 
 import cv2 #changedByAlex
 #Importing library to do image related operations
@@ -19,7 +21,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torchvision.transforms import Resize
 from torchvision.transforms import ToTensor, ToPILImage
-
+from erfnet import Net
 
 # Importing the dataset class for VOC12 and cityscapes
 from dataset import cityscapes
@@ -48,7 +50,7 @@ IMAGE_HEIGHT = 256
 OUTPUT_DIR = r'D:\Users Data\inbal.tlgip\Project\output_images'
 DATA_ROOT = r'D:\Users Data\inbal.tlgip\Desktop\ChangeDetectionDataset'
 BATCH_SIZE = 2
-NUM_WORKERS = 10
+NUM_WORKERS = 0
 NUM_EPOCHS = 150
 ENCODER_ONLY = False
 device = torch.device("cuda")
@@ -322,6 +324,7 @@ def main():
     # dataiter = iter(loader_test)
     # (val_image_A, val_image_B, val_image_labels) = dataiter.next()
     for step, (images, images1, labels) in enumerate(loader_test):
+
         outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
         outputs_val = softmax(outputs_val)
         cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(step)+'.tiff',
@@ -331,22 +334,57 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    #main()
 
-#TODO USE MODEL ON ALL TEST IMAGES, AND SAVE TO FILE. LATER, LOAD IMAGES AND CALC IOU
-#to delete later: (WE DID THIS TO NOT RUN WHOLE MAIN AGAIN...)
-softmax = torch.nn.Softmax(dim=1)
-model = torch.load(r'C:\Users\inbal.tlgip\modelsave.pt')
-# model.eval()
-co_transform_val = MyCoTransform(ENCODER_ONLY, augment=False, height=IMAGE_HEIGHT) #askAlex why we dont augment in val?
-######
+    #TODO USE MODEL ON ALL TEST IMAGES, AND SAVE TO FILE. LATER, LOAD IMAGES AND CALC IOU
+    #to delete later: (WE DID THIS TO NOT RUN WHOLE MAIN AGAIN...)
+    softmax = torch.nn.Softmax(dim=1)
+    ##model = torch.load(r'C:\Users\inbal.tlgip\modelsave.pt')
+    model_file = importlib.import_module('erfnet')
+    model = model_file.Net(NUM_CLASSES).to(device)
+    model.load_state_dict(torch.load(r'D:\Users Data\inbal.tlGIP\Desktop\modelsave.pt'))
+    model.cuda()
+    model.eval()
+    # checkpoint = torch.load(r'C:\Users\inbal.tlgip\modelsave.pt')
+    # model.load_state_dict(checkpoint['model_state_dict'])
 
-dataset_test = idd_lite(DATA_ROOT, co_transform_val, 'test')
-loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
-# dataiter = iter(loader_test)
-# (val_image_A, val_image_B, val_image_labels) = dataiter.next()
-for step, (images, images1, labels) in enumerate(loader_test):
-    outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
-    outputs_val = softmax(outputs_val)
-    cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(step)+'.tiff',
-                (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
+    # model.eval()
+
+    co_transform_val = MyCoTransform(ENCODER_ONLY, augment=False, height=IMAGE_HEIGHT) #askAlex why we dont augment in val?
+    ######
+
+    dataset_test = idd_lite(DATA_ROOT, co_transform_val, 'test')
+    loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+    # dataiter = iter(loader_test)
+    # (val_image_A, val_image_B, val_image_labels) = dataiter.next()
+    iou_sum = 0
+    count = 0
+    recall_sum=0
+    for step, (images, images1, labels) in enumerate(loader_test):
+
+
+        inputs = images.to(device)
+        inputs1 = images1.to(device)  # ChangedByUs
+        targets = labels.to(device)
+        # targets_orig = targets.clone()
+        # targets[targets_orig >= 128] = 1  # ChangedByUs
+        # targets[targets_orig < 128] = 0  # ChangedByUs
+        #outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
+        outputs_val = model([inputs.cuda(), inputs1.cuda()], only_encode=ENCODER_ONLY)
+        outputs_val = softmax(outputs_val)
+        cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(step)+'.tiff',
+                    (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
+        cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_label/'+str(step)+'.tiff',
+                    (targets[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'))
+        calc, recall = calc_iou((((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'),
+                        (targets[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'),0.1)
+
+        if not np.isnan(calc): # if there are no blobs: calc=nan
+            iou_sum += calc
+            recall_sum += recall
+            count += 1
+
+    iou_avg = iou_sum/count
+    recall_avg = recall_sum/count
+    print("iou = ", iou_avg)
+    print("recall = ", recall_avg)
