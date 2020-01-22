@@ -158,7 +158,7 @@ def main():
     print("length of training couples: ",len(loader_train))
     print(len(loader_val))
     dataiter = iter(loader_train)
-    (images, images1, labels) = dataiter.next() #ChangedByUs
+    (images, images1, labels, filename) = dataiter.next() #ChangedByUs
     # for step, (images, labels) in enumerate(loader_train):
     # plt.figure()
     # plt.imshow(ToPILImage()(images[0].cpu()))
@@ -204,7 +204,7 @@ def main():
             iouEvalTrain = iouEval(NUM_CLASSES)
 
         model.train()
-        for step, (images, images1, labels) in enumerate(loader_train): #ChangedByUs
+        for step, (images, images1, labels, filename) in enumerate(loader_train): #ChangedByUs
             start_time = time.time()
             # inputs = [images.to(device), images1.to(device)] #ChangedByUs
             inputs = images.to(device)
@@ -323,7 +323,7 @@ def main():
     loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
     # dataiter = iter(loader_test)
     # (val_image_A, val_image_B, val_image_labels) = dataiter.next()
-    for step, (images, images1, labels) in enumerate(loader_test):
+    for step, (images, images1, labels, filename) in enumerate(loader_test):
 
         outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
         outputs_val = softmax(outputs_val)
@@ -336,31 +336,24 @@ def main():
 if __name__ == '__main__':
     #main()
 
-    #TODO USE MODEL ON ALL TEST IMAGES, AND SAVE TO FILE. LATER, LOAD IMAGES AND CALC IOU
     #to delete later: (WE DID THIS TO NOT RUN WHOLE MAIN AGAIN...)
     softmax = torch.nn.Softmax(dim=1)
-    ##model = torch.load(r'C:\Users\inbal.tlgip\modelsave.pt')
     model_file = importlib.import_module('erfnet')
     model = model_file.Net(NUM_CLASSES).to(device)
     model.load_state_dict(torch.load(r'D:\Users Data\inbal.tlGIP\Desktop\modelsave.pt'))
     model.cuda()
     model.eval()
-    # checkpoint = torch.load(r'C:\Users\inbal.tlgip\modelsave.pt')
-    # model.load_state_dict(checkpoint['model_state_dict'])
-
-    # model.eval()
-
     co_transform_val = MyCoTransform(ENCODER_ONLY, augment=False, height=IMAGE_HEIGHT) #askAlex why we dont augment in val?
-    ######
 
     dataset_test = idd_lite(DATA_ROOT, co_transform_val, 'test')
-    loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=BATCH_SIZE, shuffle=True)
+    loader_test = DataLoader(dataset_test, num_workers=NUM_WORKERS, batch_size=1, shuffle=True)
     # dataiter = iter(loader_test)
     # (val_image_A, val_image_B, val_image_labels) = dataiter.next()
     iou_sum = 0
     count = 0
-    recall_sum=0
-    for step, (images, images1, labels) in enumerate(loader_test):
+    recall_sum = 0
+    precision_sum = 0
+    for step, (images, images1, labels, filename) in enumerate(loader_test):
 
 
         inputs = images.to(device)
@@ -372,19 +365,22 @@ if __name__ == '__main__':
         #outputs_val = model([images.cuda(), images1.cuda()], only_encode=ENCODER_ONLY)
         outputs_val = model([inputs.cuda(), inputs1.cuda()], only_encode=ENCODER_ONLY)
         outputs_val = softmax(outputs_val)
-        cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(step)+'.tiff',
+        cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_output/'+str(filename[0])+'.tiff',
                     (((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'))
-        cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_label/'+str(step)+'.tiff',
-                    (targets[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'))
-        calc, recall = calc_iou((((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'),
-                        (targets[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'),0.1)
+        # cv2.imwrite(r'D:\Users Data\inbal.tlgip\Project\output_images\test_label/'+str(filename[0])+'.tiff',
+        #             (targets[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'))
+        iou_avg_local, recall, precision = calc_iou((((outputs_val[0, 1, :, :] > 0.5) * 255).squeeze().cpu().numpy()).astype('uint8'),
+                        (targets[0, :, :, :].squeeze().cpu().numpy()).astype('uint8'), 0.5)
 
-        if not np.isnan(calc): # if there are no blobs: calc=nan
-            iou_sum += calc
+        if not np.isnan(iou_avg_local): # if there are no blobs: calc=nan
+            iou_sum += iou_avg_local
             recall_sum += recall
+            precision_sum += precision
             count += 1
 
     iou_avg = iou_sum/count
     recall_avg = recall_sum/count
+    precision_avg = precision_sum/count
     print("iou = ", iou_avg)
     print("recall = ", recall_avg)
+    print("precision = ", precision_avg)
